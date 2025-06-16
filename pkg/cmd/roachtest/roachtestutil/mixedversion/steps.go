@@ -16,6 +16,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/clusterupgrade"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/failureinjection/failures"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
 	"github.com/cockroachdb/cockroach/pkg/util/ctxgroup"
@@ -714,4 +715,24 @@ func startStopOpts(opts ...option.StartStopOption) []option.StartStopOption {
 	return append([]option.StartStopOption{
 		option.NoBackupSchedule,
 	}, opts...)
+}
+
+type diskStallStep struct {
+}
+
+func (s diskStallStep) Background() shouldStop { return nil }
+
+func (s diskStallStep) Description() string {
+	return "stall disk writes"
+}
+
+func (s diskStallStep) Run(ctx context.Context, l *logger.Logger, _ *rand.Rand, h *Helper) error {
+	fr := failures.NewFailureRegistry()
+	fr.Register()
+
+	f, err := fr.GetFailer("", failures.CgroupsDiskStallName, l, h.runner.cluster.IsSecure())
+	if err != nil {
+		return errors.Wrapf(err, "failed to get failure %s", failures.CgroupsDiskStallName)
+	}
+	return f.Inject(ctx, l, failures.DiskStallArgs{StallLogs: true, StallReads: true, StallWrites: true, RestartNodes: true, Nodes: install.Nodes{}})
 }

@@ -383,3 +383,40 @@ func (m clusterSettingMutator) changeSteps(
 
 	return steps
 }
+
+const (
+	DiskStall = "disk_stall"
+)
+
+type diskStallMutator struct{}
+
+func (m diskStallMutator) Name() string { return DiskStall }
+
+func (m diskStallMutator) Probability() float64 {
+	return 1.0
+}
+
+func (m diskStallMutator) Generate(rng *rand.Rand, plan *TestPlan) []mutation {
+	var mutations []mutation
+	numStalls := 3
+	possiblePointsInTime := plan.
+		newStepSelector().
+		Filter(func(s *singleStep) bool {
+
+			// We skip restart steps as we might insert the cluster setting
+			// change step concurrently with the selected step.
+			_, isRestartSystem := s.impl.(restartWithNewBinaryStep)
+			_, isRestartTenant := s.impl.(restartVirtualClusterStep)
+			isRestart := isRestartSystem || isRestartTenant
+			return s.context.System.Stage >= OnStartupStage && !isRestart
+		})
+
+	for range numStalls {
+		addRandomly := possiblePointsInTime.
+			RandomStep(rng).
+			Insert(rng, diskStallStep{})
+
+		mutations = append(mutations, addRandomly...)
+	}
+	return mutations
+}
