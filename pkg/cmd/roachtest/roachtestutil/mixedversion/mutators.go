@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
+	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/clusterupgrade"
@@ -653,4 +654,71 @@ func selectPartitions(
 		}
 	}
 	return option.NodeListOption{partitionedNode}, leftPartition, rightPartition
+}
+
+type networkLatencyMutator struct{}
+
+func (m networkLatencyMutator) Name() string {
+	return failures.NetworkLatencyName
+}
+
+func (m networkLatencyMutator) Probability() float64 {
+	return 1.0
+}
+
+func (m networkLatencyMutator) Generate(
+	rng *rand.Rand, plan *TestPlan, planner *testPlanner,
+) ([]mutation, error) {
+	var mutations []mutation
+	upgrades := randomUpgrades(rng, plan)
+	idx := newStepIndex(plan)
+	nodeList := planner.currentContext.System.Descriptor.Nodes
+
+	failure := failures.GetFailureRegistry()
+	f, err := failure.GetFailer(planner.cluster.Name(), failures.NetworkLatencyName, planner.logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get failer for %s: %w", failures.NetworkLatencyName, err)
+	}
+
+	for _, upgrade := range upgrades {
+		possiblePointsInTime := upgrade.
+			Filter(func(s *singleStep) bool {
+				return s.context.System.Stage >= InitUpgradeStage && !idx.IsConcurrent(s)
+			})
+
+		stepToAddLatency := possiblePointsInTime.RandomStep(rng)
+
+		_, validRecoverStep := upgrade.CutAfter(func(s *singleStep) bool {
+			return s == stepToAddLatency[0]
+		})
+
+		stepToRecover := validRecoverStep.RandomStep(rng)
+		rand.Shuffle(len(nodeList), func(i, j int) {
+			nodeList[i], nodeList[j] = nodeList[j], nodeList[i]
+		})
+		nodeCount := len(nodeList)
+		partitionedNode := nodeList[rng.Intn(nodeCount)]
+
+		leftPartition := []install.Node{install.Node(partitionedNode)}
+		var rightPartition []install.Node
+
+		for i := 0; i < nodeCount; i++ {
+			node := nodeList[i]
+			if node != partitionedNode {
+				rightPartition = append(rightPartition, install.Node(node))
+			}
+		}
+
+		var latencies []failures.ArtificialLatency
+		latencies = append(latencies, failures.ArtificialLatency{Source: leftPartition, Destination: rightPartition, Delay: time.Duration(rng.Intn(8000)+2000) * time.Millisecond})
+
+		args := failures.NetworkLatencyArgs{ArtificialLatencies: latencies}
+
+		addLatencyStep := stepToAddLatency.InsertBefore(networkLatencyInjectStep{f, args})
+		addRecoveryStep := stepToRecover.Insert(rng, networkLatencyRecoverStep{f, args})
+
+		mutations = append(mutations, addLatencyStep...)
+		mutations = append(mutations, addRecoveryStep...)
+	}
+	return mutations, nil
 }

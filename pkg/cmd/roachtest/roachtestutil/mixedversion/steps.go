@@ -969,3 +969,64 @@ func (s networkPartitionRecoveryStep) Run(
 func (s networkPartitionRecoveryStep) ConcurrencyDisabled() bool {
 	return false
 }
+
+type networkLatencyInjectStep struct {
+	f    *failures.Failer
+	args failures.NetworkLatencyArgs
+}
+
+func (s networkLatencyInjectStep) Background() shouldStop { return nil }
+
+func (s networkLatencyInjectStep) Description() string {
+	return fmt.Sprintf("injecting network latency between %d and %v with %s delay", s.args.ArtificialLatencies[0].Source, s.args.ArtificialLatencies[0].Destination, s.args.ArtificialLatencies[0].Delay)
+}
+
+func (s networkLatencyInjectStep) Run(
+	ctx context.Context, l *logger.Logger, _ *rand.Rand, h *Helper,
+) error {
+
+	if err := s.f.Setup(ctx, l, s.args); err != nil {
+		return errors.Wrapf(err, "failed to setup failure %s", failures.NetworkLatencyName)
+	}
+
+	if err := s.f.Inject(ctx, l, failures.NetworkLatencyArgs{}); err != nil {
+		return errors.Wrapf(err, "failed to inject failure %s", failures.NetworkLatencyName)
+	}
+
+	return s.f.WaitForFailureToPropagate(ctx, l)
+}
+
+func (s networkLatencyInjectStep) ConcurrencyDisabled() bool {
+	return false
+}
+
+type networkLatencyRecoverStep struct {
+	f    *failures.Failer
+	args failures.NetworkLatencyArgs
+}
+
+func (s networkLatencyRecoverStep) Background() shouldStop { return nil }
+
+func (s networkLatencyRecoverStep) Description() string {
+	return fmt.Sprintf("recovering from network latency between %d and %v with %s delay", s.args.ArtificialLatencies[0].Source, s.args.ArtificialLatencies[0].Destination, s.args.ArtificialLatencies[0].Delay)
+}
+
+func (s networkLatencyRecoverStep) Run(
+	ctx context.Context, l *logger.Logger, _ *rand.Rand, h *Helper,
+) error {
+
+	if err := s.f.Recover(ctx, l); err != nil {
+		return errors.Wrapf(err, "failed to recover from failure %s", failures.NetworkLatencyName)
+	}
+
+	if err := s.f.WaitForFailureToRecover(ctx, l); err != nil {
+		return errors.Wrapf(err, "failed to recover from failure %s", failures.NetworkLatencyName)
+	}
+
+	return s.f.Cleanup(ctx, l)
+
+}
+
+func (s networkLatencyRecoverStep) ConcurrencyDisabled() bool {
+	return false
+}
